@@ -6,18 +6,39 @@ void main() {
   runApp(const DictionaryApp());
 }
 
+final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
+final ValueNotifier<Color> colorNotifier = ValueNotifier(Colors.blue);
+
 class DictionaryApp extends StatelessWidget {
   const DictionaryApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Grammar Dictionary',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-      ),
-      home: const MainScreen(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeNotifier,
+      builder: (_, ThemeMode currentMode, __) {
+        return ValueListenableBuilder<Color>(
+          valueListenable: colorNotifier,
+          builder: (_, Color currentColor, __) {
+            return MaterialApp(
+              title: 'Grammar Dictionary',
+              themeMode: currentMode,
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(seedColor: currentColor),
+                useMaterial3: true,
+              ),
+              darkTheme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: currentColor,
+                  brightness: Brightness.dark,
+                ),
+                useMaterial3: true,
+              ),
+              home: const MainScreen(),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -51,11 +72,13 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _toggleFavorite(String id, bool isFav) async {
     await DatabaseHelper.instance.toggleFavorite(id, isFav);
     setState(() {
+      final newFavorites = Set<String>.from(_favoriteIds);
       if (isFav) {
-        _favoriteIds.add(id);
+        newFavorites.add(id);
       } else {
-        _favoriteIds.remove(id);
+        newFavorites.remove(id);
       }
+      _favoriteIds = newFavorites;
     });
   }
 
@@ -73,6 +96,7 @@ class _MainScreenState extends State<MainScreen> {
             favoriteIds: _favoriteIds,
             onToggleFavorite: _toggleFavorite,
           ),
+          const SettingsTab(),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -84,7 +108,14 @@ class _MainScreenState extends State<MainScreen> {
         },
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
-          BottomNavigationBarItem(icon: Icon(Icons.favorite), label: 'Favorite'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.favorite),
+            label: 'Favorite',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
         ],
       ),
     );
@@ -215,7 +246,7 @@ class _SearchTabState extends State<SearchTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('日本語文法'),
+        title: const Text('Search'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
@@ -237,9 +268,12 @@ class _SearchTabState extends State<SearchTab> {
                 prefixIcon: const Icon(Icons.search),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12.0),
+                  borderSide: BorderSide.none,
                 ),
                 filled: true,
-                fillColor: Colors.grey.shade100,
+                fillColor: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.grey.shade800
+                    : Colors.grey.shade100,
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.clear),
                   onPressed: () {
@@ -266,8 +300,13 @@ class _SearchTabState extends State<SearchTab> {
                       final grammar = _grammarList[index];
                       return GrammarListItem(
                         grammar: grammar,
-                        isFavorite: widget.favoriteIds.contains(grammar['id']?.toString()),
-                        onToggleFavorite: (isFav) => widget.onToggleFavorite(grammar['id'].toString(), isFav),
+                        isFavorite: widget.favoriteIds.contains(
+                          grammar['id']?.toString(),
+                        ),
+                        onToggleFavorite: (isFav) => widget.onToggleFavorite(
+                          grammar['id'].toString(),
+                          isFav,
+                        ),
                       );
                     },
                   ),
@@ -326,28 +365,47 @@ class _FavoriteTabState extends State<FavoriteTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Favorite Grammar'),
+        title: const Text('Favorites'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _favoriteList.isEmpty
-          ? const Center(
-              child: Text(
-                'No favorite grammar points yet.',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            )
-          : ListView.builder(
-              itemCount: _favoriteList.length,
-              itemBuilder: (context, index) {
-                final grammar = _favoriteList[index];
-                return GrammarListItem(
-                  grammar: grammar,
-                  isFavorite: widget.favoriteIds.contains(grammar['id']?.toString()),
-                  onToggleFavorite: (isFav) => widget.onToggleFavorite(grammar['id'].toString(), isFav),
-                );
-              },
+          : RefreshIndicator(
+              onRefresh: _fetchFavorites,
+              child: _favoriteList.isEmpty
+                  ? CustomScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      slivers: [
+                        SliverFillRemaining(
+                          child: Center(
+                            child: const Text(
+                              'No favorite grammar points yet.',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: _favoriteList.length,
+                      itemBuilder: (context, index) {
+                        final grammar = _favoriteList[index];
+                        return GrammarListItem(
+                          grammar: grammar,
+                          isFavorite: widget.favoriteIds.contains(
+                            grammar['id']?.toString(),
+                          ),
+                          onToggleFavorite: (isFav) => widget.onToggleFavorite(
+                            grammar['id'].toString(),
+                            isFav,
+                          ),
+                        );
+                      },
+                    ),
             ),
     );
   }
@@ -373,7 +431,7 @@ class GrammarListItem extends StatelessWidget {
         grammar['search']?.toString() ??
         'No meaning';
     final level = grammar['level']?.toString() ?? '-';
-    
+
     String follow = '';
     final knowledgeStr = grammar['KownLedge']?.toString() ?? '';
     if (knowledgeStr.isNotEmpty && knowledgeStr != 'null') {
@@ -387,19 +445,24 @@ class GrammarListItem extends StatelessWidget {
       }
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
+          if (!isDark)
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
         ],
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+        ),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
@@ -408,8 +471,7 @@ class GrammarListItem extends StatelessWidget {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) =>
-                  GrammarDetailPage(grammarData: grammar),
+              builder: (context) => GrammarDetailPage(grammarData: grammar),
             ),
           );
         },
@@ -420,11 +482,13 @@ class GrammarListItem extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 24,
-                backgroundColor: Colors.blue.shade50,
+                backgroundColor: isDark
+                    ? Colors.blue.shade900.withOpacity(0.5)
+                    : Colors.blue.shade50,
                 child: Text(
                   'N$level',
                   style: TextStyle(
-                    color: Colors.blue.shade900,
+                    color: isDark ? Colors.blue.shade200 : Colors.blue.shade900,
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
                   ),
@@ -437,10 +501,10 @@ class GrammarListItem extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+                        color: Theme.of(context).colorScheme.onSurface,
                       ),
                     ),
                     if (follow.isNotEmpty)
@@ -450,7 +514,7 @@ class GrammarListItem extends StatelessWidget {
                           follow,
                           style: TextStyle(
                             fontSize: 14,
-                            color: Colors.blue.shade700,
+                            color: Theme.of(context).colorScheme.primary,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -460,9 +524,11 @@ class GrammarListItem extends StatelessWidget {
                       meaning,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
-                        color: Colors.black54,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withOpacity(0.6),
                         height: 1.3,
                       ),
                     ),
@@ -503,8 +569,8 @@ class GrammarDetailPage extends StatelessWidget {
         spans.add(
           TextSpan(
             text: text.substring(lastMatchEnd, match.start),
-            style: const TextStyle(
-              color: Colors.black87,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurface,
               fontSize: 16,
               height: 1.5,
             ),
@@ -529,8 +595,8 @@ class GrammarDetailPage extends StatelessWidget {
       spans.add(
         TextSpan(
           text: text.substring(lastMatchEnd),
-          style: const TextStyle(
-            color: Colors.black87,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurface,
             fontSize: 16,
             height: 1.5,
           ),
@@ -541,15 +607,15 @@ class GrammarDetailPage extends StatelessWidget {
     return spans;
   }
 
-  Widget _buildSectionTitle(String title) {
+  Widget _buildSectionTitle(String title, BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 24, bottom: 12),
       child: Text(
         title,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.bold,
-          color: Colors.black87,
+          color: Theme.of(context).colorScheme.onSurface,
         ),
       ),
     );
@@ -557,10 +623,7 @@ class GrammarDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final title =
-        grammarData['showkey']?.toString() ??
-        grammarData['character50']?.toString() ??
-        'Unknown';
+    final title = grammarData['showkey']?.toString() ?? 'Unknown';
     final fallbackMeaning =
         grammarData['allcnmean']?.toString() ??
         grammarData['tag']?.toString() ??
@@ -572,7 +635,7 @@ class GrammarDetailPage extends StatelessWidget {
       try {
         discriminationList = jsonDecode(discriminationStr);
       } catch (e) {
-        print('Error decoding discrimination: $e');
+        debugPrint('Error decoding discrimination: $e');
       }
     }
     final knowledgeStr = grammarData['KownLedge']?.toString() ?? '';
@@ -582,9 +645,11 @@ class GrammarDetailPage extends StatelessWidget {
       try {
         knowledgeList = jsonDecode(knowledgeStr);
       } catch (e) {
-        print('Error decoding KownLedge: $e');
+        debugPrint('Error decoding KownLedge: $e');
       }
     }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       appBar: AppBar(
@@ -606,14 +671,18 @@ class GrammarDetailPage extends StatelessWidget {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade100,
+                      color: isDark
+                          ? Colors.blue.shade900.withOpacity(0.5)
+                          : Colors.blue.shade100,
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
                       'JLPT N$level',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: Colors.blue.shade900,
+                        color: isDark
+                            ? Colors.blue.shade200
+                            : Colors.blue.shade900,
                       ),
                     ),
                   ),
@@ -633,30 +702,36 @@ class GrammarDetailPage extends StatelessWidget {
 
               if (knowledgeList.isEmpty) ...[
                 // Fallback UI if JSON parsing fails or is empty
-                _buildSectionTitle('Meaning'),
+                _buildSectionTitle('Meaning', context),
                 Text(
                   fallbackMeaning,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     height: 1.5,
-                    color: Colors.black87,
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 if (knowledgeStr.isNotEmpty && knowledgeStr != 'null') ...[
-                  _buildSectionTitle('Knowledge (Raw)'),
+                  _buildSectionTitle('Knowledge (Raw)', context),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade50,
+                      color: isDark
+                          ? Colors.green.shade900.withOpacity(0.3)
+                          : Colors.green.shade50,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.shade100),
+                      border: Border.all(
+                        color: isDark
+                            ? Colors.green.shade800
+                            : Colors.green.shade100,
+                      ),
                     ),
                     child: Text(
                       knowledgeStr,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
-                        color: Colors.black87,
+                        color: Theme.of(context).colorScheme.onSurface,
                         height: 1.5,
                       ),
                     ),
@@ -679,16 +754,21 @@ class GrammarDetailPage extends StatelessWidget {
                     margin: const EdgeInsets.only(top: 24),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
+                        if (!isDark)
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
                       ],
-                      border: Border.all(color: Colors.grey.shade200),
+                      border: Border.all(
+                        color: isDark
+                            ? Colors.grey.shade800
+                            : Colors.grey.shade200,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -713,9 +793,12 @@ class GrammarDetailPage extends StatelessWidget {
                               Expanded(
                                 child: Text(
                                   cnmean,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
                                   ),
                                 ),
                               ),
@@ -726,13 +809,17 @@ class GrammarDetailPage extends StatelessWidget {
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: Colors.grey.shade100,
+                                    color: isDark
+                                        ? Colors.grey.shade800
+                                        : Colors.grey.shade100,
                                     borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
                                     cat,
                                     style: TextStyle(
-                                      color: Colors.grey.shade700,
+                                      color: isDark
+                                          ? Colors.grey.shade300
+                                          : Colors.grey.shade700,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -746,7 +833,9 @@ class GrammarDetailPage extends StatelessWidget {
                             width: double.infinity,
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
+                              color: isDark
+                                  ? Colors.blue.shade900.withOpacity(0.2)
+                                  : Colors.blue.shade50,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Column(
@@ -755,30 +844,36 @@ class GrammarDetailPage extends StatelessWidget {
                                 if (cnexplain.isNotEmpty)
                                   Text(
                                     cnexplain,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 15,
                                       height: 1.5,
-                                      color: Colors.black87,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurface,
                                     ),
                                   ),
                                 if (cnexplain.isNotEmpty &&
                                     jpexplain.isNotEmpty)
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
                                       vertical: 8.0,
                                     ),
                                     child: Divider(
                                       height: 1,
-                                      color: Colors.black12,
+                                      color: isDark
+                                          ? Colors.white24
+                                          : Colors.black12,
                                     ),
                                   ),
                                 if (jpexplain.isNotEmpty)
                                   Text(
                                     jpexplain,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 14,
                                       height: 1.5,
-                                      color: Colors.black54,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurface.withOpacity(0.7),
                                     ),
                                   ),
                               ],
@@ -811,12 +906,12 @@ class GrammarDetailPage extends StatelessWidget {
                           ),
                         if (examples.isNotEmpty) ...[
                           const SizedBox(height: 16),
-                          const Text(
+                          Text(
                             'Examples',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 16,
-                              color: Colors.black87,
+                              color: Theme.of(context).colorScheme.onSurface,
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -829,15 +924,17 @@ class GrammarDetailPage extends StatelessWidget {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Padding(
-                                    padding: EdgeInsets.only(
+                                  Padding(
+                                    padding: const EdgeInsets.only(
                                       top: 6.0,
                                       right: 8.0,
                                     ),
                                     child: Icon(
                                       Icons.circle,
                                       size: 6,
-                                      color: Colors.grey,
+                                      color: isDark
+                                          ? Colors.grey.shade600
+                                          : Colors.grey,
                                     ),
                                   ),
                                   Expanded(
@@ -862,7 +959,7 @@ class GrammarDetailPage extends StatelessWidget {
               ],
 
               if (discriminationList.isNotEmpty) ...[
-                _buildSectionTitle('Discrimination / Notes'),
+                _buildSectionTitle('Discrimination / Notes', context),
                 ...discriminationList.map((item) {
                   final info = item['discrimination_info']?.toString() ?? '';
                   final kidsList = item['kids_list'] as List<dynamic>? ?? [];
@@ -873,9 +970,15 @@ class GrammarDetailPage extends StatelessWidget {
                     margin: const EdgeInsets.only(bottom: 16),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
+                      color: isDark
+                          ? Colors.orange.shade900.withOpacity(0.2)
+                          : Colors.orange.shade50,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.shade100),
+                      border: Border.all(
+                        color: isDark
+                            ? Colors.orange.shade800
+                            : Colors.orange.shade100,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -898,13 +1001,17 @@ class GrammarDetailPage extends StatelessWidget {
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: Colors.orange.shade200,
+                                    color: isDark
+                                        ? Colors.orange.shade800
+                                        : Colors.orange.shade200,
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                   child: Text(
                                     display,
                                     style: TextStyle(
-                                      color: Colors.orange.shade900,
+                                      color: isDark
+                                          ? Colors.orange.shade200
+                                          : Colors.orange.shade900,
                                       fontWeight: FontWeight.bold,
                                       fontSize: 14,
                                     ),
@@ -915,9 +1022,9 @@ class GrammarDetailPage extends StatelessWidget {
                           ),
                         Text(
                           info,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
-                            color: Colors.black87,
+                            color: Theme.of(context).colorScheme.onSurface,
                             height: 1.6,
                           ),
                         ),
@@ -927,20 +1034,26 @@ class GrammarDetailPage extends StatelessWidget {
                 }).toList(),
               ] else if (discriminationStr.isNotEmpty &&
                   discriminationStr != 'null') ...[
-                _buildSectionTitle('Notes / Discrimination'),
+                _buildSectionTitle('Notes / Discrimination', context),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.orange.shade50,
+                    color: isDark
+                        ? Colors.orange.shade900.withOpacity(0.2)
+                        : Colors.orange.shade50,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange.shade100),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.orange.shade800
+                          : Colors.orange.shade100,
+                    ),
                   ),
                   child: Text(
                     discriminationStr,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
-                      color: Colors.black87,
+                      color: Theme.of(context).colorScheme.onSurface,
                       height: 1.5,
                     ),
                   ),
@@ -949,6 +1062,127 @@ class GrammarDetailPage extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class SettingsTab extends StatelessWidget {
+  const SettingsTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
+      body: ListView(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text(
+              'Appearance',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: themeNotifier,
+            builder: (context, currentMode, child) {
+              return Column(
+                children: [
+                  RadioListTile<ThemeMode>(
+                    title: const Text('System Default'),
+                    value: ThemeMode.system,
+                    groupValue: currentMode,
+                    onChanged: (mode) => themeNotifier.value = mode!,
+                  ),
+                  RadioListTile<ThemeMode>(
+                    title: const Text('Light Mode'),
+                    value: ThemeMode.light,
+                    groupValue: currentMode,
+                    onChanged: (mode) => themeNotifier.value = mode!,
+                  ),
+                  RadioListTile<ThemeMode>(
+                    title: const Text('Dark Mode'),
+                    value: ThemeMode.dark,
+                    groupValue: currentMode,
+                    onChanged: (mode) => themeNotifier.value = mode!,
+                  ),
+                ],
+              );
+            },
+          ),
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text(
+              'Theme Color',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          ValueListenableBuilder<Color>(
+            valueListenable: colorNotifier,
+            builder: (context, currentColor, child) {
+              final colors = [
+                Colors.blue,
+                Colors.red,
+                Colors.green,
+                Colors.purple,
+                Colors.orange,
+                Colors.teal,
+                Colors.pink,
+              ];
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: colors.map((color) {
+                    final isSelected = currentColor.value == color.value;
+                    return GestureDetector(
+                      onTap: () => colorNotifier.value = color,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: isSelected
+                              ? Border.all(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
+                                  width: 3,
+                                )
+                              : null,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: isSelected
+                            ? const Icon(Icons.check, color: Colors.white)
+                            : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }

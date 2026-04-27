@@ -71,14 +71,16 @@ class DatabaseHelper {
       'GrammarTable',
       where: whereClause,
       whereArgs: whereArgs,
-      orderBy: 'level DESC',
+      orderBy: 'level DESC,showkey ASC',
     );
   }
 
   Future<void> toggleFavorite(String id, bool isFavorite) async {
     final db = await instance.database;
     if (isFavorite) {
-      await db.insert('Favorites', {'id': id}, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await db.insert('Favorites', {
+        'id': id,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     } else {
       await db.delete('Favorites', where: 'id = ?', whereArgs: [id]);
     }
@@ -86,7 +88,11 @@ class DatabaseHelper {
 
   Future<bool> isFavorite(String id) async {
     final db = await instance.database;
-    final results = await db.query('Favorites', where: 'id = ?', whereArgs: [id]);
+    final results = await db.query(
+      'Favorites',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     return results.isNotEmpty;
   }
 
@@ -101,8 +107,8 @@ class DatabaseHelper {
     return await db.rawQuery('''
       SELECT g.* 
       FROM GrammarTable g
-      INNER JOIN Favorites f ON g.id = f.id
-      ORDER BY g.level DESC
+      INNER JOIN Favorites f ON g.id = f.id01
+      ORDER BY g.level DESC, g.showkey ASC
     ''');
   }
 }
