@@ -104,10 +104,20 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getFavorites() async {
     final db = await instance.database;
+
+    final tables = await db.query(
+      'sqlite_master',
+      where: 'type = ? AND name = ?',
+      whereArgs: ['table', 'Favorites'],
+    );
+    if (tables.isEmpty) {
+      return [];
+    }
+
     return await db.rawQuery('''
       SELECT g.* 
       FROM GrammarTable g
-      INNER JOIN Favorites f ON g.id = f.id01
+      INNER JOIN Favorites f ON g.id = f.id
       ORDER BY g.level DESC, g.showkey ASC
     ''');
   }
