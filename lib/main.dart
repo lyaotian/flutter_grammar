@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:flutter_application_1/database_helper.dart';
+import 'package:flutter_grammar/database_helper.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,7 +57,7 @@ class DictionaryApp extends StatelessWidget {
           valueListenable: colorNotifier,
           builder: (_, Color currentColor, __) {
             return MaterialApp(
-              title: 'Grammar Dictionary',
+              title: 'JP Grammar',
               themeMode: currentMode,
               theme: ThemeData(
                 colorScheme: ColorScheme.fromSeed(seedColor: currentColor),
