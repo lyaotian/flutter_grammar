@@ -1,13 +1,43 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_application_1/database_helper.dart';
-
-void main() {
-  runApp(const DictionaryApp());
-}
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
 final ValueNotifier<Color> colorNotifier = ValueNotifier(Colors.blue);
+final ValueNotifier<String> languageNotifier = ValueNotifier('English');
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+
+  final themeIndex = prefs.getInt('themeMode') ?? ThemeMode.system.index;
+  if (themeIndex >= 0 && themeIndex < ThemeMode.values.length) {
+    themeNotifier.value = ThemeMode.values[themeIndex];
+  }
+
+  final colorValue = prefs.getInt('themeColor') ?? Colors.blue.value;
+  colorNotifier.value = Color(colorValue);
+
+  final language = prefs.getString('language') ?? 'English';
+  languageNotifier.value = language;
+
+  themeNotifier.addListener(() {
+    prefs.setInt('themeMode', themeNotifier.value.index);
+  });
+
+  colorNotifier.addListener(() {
+    prefs.setInt('themeColor', colorNotifier.value.value);
+  });
+
+  languageNotifier.addListener(() {
+    prefs.setString('language', languageNotifier.value);
+  });
+
+  runApp(const DictionaryApp());
+}
 
 class DictionaryApp extends StatelessWidget {
   const DictionaryApp({super.key});
@@ -136,23 +166,72 @@ class SearchTab extends StatefulWidget {
   State<SearchTab> createState() => _SearchTabState();
 }
 
-class _SearchTabState extends State<SearchTab> {
+class _SearchTabState extends State<SearchTab> with WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   List<Map<String, dynamic>> _grammarList = [];
   bool _isLoading = true;
   Set<String> _selectedLevels = {};
+  bool _isSearching = false;
 
   @override
   void initState() {
     super.initState();
-    _fetchData();
+    WidgetsBinding.instance.addObserver(this);
+    _loadStateAndFetchData();
+  }
+
+  Future<void> _loadStateAndFetchData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedText = prefs.getString('search_text') ?? '';
+    final savedLevels = prefs.getStringList('search_levels') ?? [];
+    final savedScroll = prefs.getDouble('search_scroll') ?? 0.0;
+
+    if (mounted) {
+      setState(() {
+        _searchController.text = savedText;
+        if (savedText.isNotEmpty) {
+          _isSearching = true;
+        }
+        _selectedLevels = savedLevels.toSet();
+      });
+    }
+
+    await _fetchData();
+
+    if (mounted && savedScroll > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(savedScroll);
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
+    _saveState();
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _saveState();
+    }
+  }
+
+  Future<void> _saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('search_text', _searchController.text);
+    await prefs.setStringList('search_levels', _selectedLevels.toList());
+    if (_scrollController.hasClients) {
+      await prefs.setDouble('search_scroll', _scrollController.offset);
+    }
   }
 
   Future<void> _fetchData() async {
@@ -246,9 +325,60 @@ class _SearchTabState extends State<SearchTab> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Search'),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                onChanged: _filterWords,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'Search for grammar (e.g. てある)...',
+                  prefixIcon: const Icon(Icons.search),
+                  contentPadding: const EdgeInsets.symmetric(
+                    vertical: 0,
+                    horizontal: 16,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12.0),
+                    borderSide: BorderSide.none,
+                  ),
+                  filled: true,
+                  fillColor: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey.shade800
+                      : Colors.white,
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _searchController.clear();
+                      _filterWords('');
+                    },
+                  ),
+                ),
+              )
+            : const Text('Search'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (!_isSearching)
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () {
+                setState(() {
+                  _isSearching = true;
+                });
+              },
+              tooltip: 'Search grammar',
+            ),
+          if (_isSearching)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () {
+                setState(() {
+                  _isSearching = false;
+                  _searchController.clear();
+                  _filterWords('');
+                });
+              },
+              tooltip: 'Close search',
+            ),
           IconButton(
             icon: const Icon(Icons.filter_list),
             onPressed: _showFilterDialog,
@@ -258,32 +388,6 @@ class _SearchTabState extends State<SearchTab> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: TextField(
-              controller: _searchController,
-              onChanged: _filterWords,
-              decoration: InputDecoration(
-                hintText: 'Search for grammar (e.g. てある)...',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12.0),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: Theme.of(context).brightness == Brightness.dark
-                    ? Colors.grey.shade800
-                    : Colors.grey.shade100,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _searchController.clear();
-                    _filterWords('');
-                  },
-                ),
-              ),
-            ),
-          ),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -295,6 +399,7 @@ class _SearchTabState extends State<SearchTab> {
                     ),
                   )
                 : ListView.builder(
+                    controller: _scrollController,
                     itemCount: _grammarList.length,
                     itemBuilder: (context, index) {
                       final grammar = _grammarList[index];
@@ -1067,121 +1172,330 @@ class GrammarDetailPage extends StatelessWidget {
   }
 }
 
-class SettingsTab extends StatelessWidget {
+class SettingsTab extends StatefulWidget {
   const SettingsTab({super.key});
 
   @override
+  State<SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<SettingsTab> {
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() {
+          _version = '${info.version}+${info.buildNumber}';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _version = '1.0.0+1';
+        });
+      }
+    }
+  }
+
+  Future<void> _launchFeedback() async {
+    final Uri emailLaunchUri = Uri(
+      scheme: 'mailto',
+      path: 'feedback@example.com',
+      query: 'subject=App%20Feedback',
+    );
+    try {
+      if (!await launchUrl(emailLaunchUri)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not launch email client')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not launch email client')),
+        );
+      }
+    }
+  }
+
+  Widget _buildSectionHeader(String title, BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 24, bottom: 8),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: Theme.of(context).colorScheme.primary,
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text(
+          'Settings',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        elevation: 0,
+        centerTitle: true,
       ),
       body: ListView(
+        physics: const BouncingScrollPhysics(),
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Text(
-              'Appearance',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
+          _buildSectionHeader('Appearance', context),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16.0),
+            elevation: isDark ? 0 : 0.2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: isDark
+                  ? BorderSide(color: Colors.grey.shade800)
+                  : BorderSide.none,
             ),
-          ),
-          ValueListenableBuilder<ThemeMode>(
-            valueListenable: themeNotifier,
-            builder: (context, currentMode, child) {
-              return Column(
-                children: [
-                  RadioListTile<ThemeMode>(
-                    title: const Text('System Default'),
-                    value: ThemeMode.system,
-                    groupValue: currentMode,
-                    onChanged: (mode) => themeNotifier.value = mode!,
-                  ),
-                  RadioListTile<ThemeMode>(
-                    title: const Text('Light Mode'),
-                    value: ThemeMode.light,
-                    groupValue: currentMode,
-                    onChanged: (mode) => themeNotifier.value = mode!,
-                  ),
-                  RadioListTile<ThemeMode>(
-                    title: const Text('Dark Mode'),
-                    value: ThemeMode.dark,
-                    groupValue: currentMode,
-                    onChanged: (mode) => themeNotifier.value = mode!,
-                  ),
-                ],
-              );
-            },
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Text(
-              'Theme Color',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ),
-          ValueListenableBuilder<Color>(
-            valueListenable: colorNotifier,
-            builder: (context, currentColor, child) {
-              final colors = [
-                Colors.blue,
-                Colors.red,
-                Colors.green,
-                Colors.purple,
-                Colors.orange,
-                Colors.teal,
-                Colors.pink,
-              ];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: colors.map((color) {
-                    final isSelected = currentColor.value == color.value;
-                    return GestureDetector(
-                      onTap: () => colorNotifier.value = color,
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: isSelected
-                              ? Border.all(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurface,
-                                  width: 3,
-                                )
-                              : null,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
+            child: Column(
+              children: [
+                ValueListenableBuilder<ThemeMode>(
+                  valueListenable: themeNotifier,
+                  builder: (context, currentMode, child) {
+                    return Column(
+                      children: [
+                        RadioListTile<ThemeMode>(
+                          title: const Text(
+                            'System Default',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          value: ThemeMode.system,
+                          groupValue: currentMode,
+                          onChanged: (mode) => themeNotifier.value = mode!,
                         ),
-                        child: isSelected
-                            ? const Icon(Icons.check, color: Colors.white)
-                            : null,
-                      ),
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        RadioListTile<ThemeMode>(
+                          title: const Text(
+                            'Light Mode',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          value: ThemeMode.light,
+                          groupValue: currentMode,
+                          onChanged: (mode) => themeNotifier.value = mode!,
+                        ),
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                        RadioListTile<ThemeMode>(
+                          title: const Text(
+                            'Dark Mode',
+                            style: TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                          value: ThemeMode.dark,
+                          groupValue: currentMode,
+                          onChanged: (mode) => themeNotifier.value = mode!,
+                        ),
+                      ],
                     );
-                  }).toList(),
+                  },
                 ),
-              );
-            },
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Theme Color',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ValueListenableBuilder<Color>(
+                        valueListenable: colorNotifier,
+                        builder: (context, currentColor, child) {
+                          final colors = [
+                            Colors.blue,
+                            Colors.red,
+                            Colors.green,
+                            Colors.purple,
+                            Colors.orange,
+                            Colors.teal,
+                            Colors.pink,
+                          ];
+                          return Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: colors.map((color) {
+                              final isSelected =
+                                  currentColor.value == color.value;
+                              return GestureDetector(
+                                onTap: () => colorNotifier.value = color,
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                    border: isSelected
+                                        ? Border.all(
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurface,
+                                            width: 3,
+                                          )
+                                        : null,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: color.withOpacity(0.4),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: isSelected
+                                      ? const Icon(
+                                          Icons.check,
+                                          color: Colors.white,
+                                        )
+                                      : null,
+                                ),
+                              );
+                            }).toList(),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
+
+          _buildSectionHeader('Language', context),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16.0),
+            elevation: isDark ? 0 : 0.2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: isDark
+                  ? BorderSide(color: Colors.grey.shade800)
+                  : BorderSide.none,
+            ),
+            child: ValueListenableBuilder<String>(
+              valueListenable: languageNotifier,
+              builder: (context, currentLang, child) {
+                return Column(
+                  children: [
+                    RadioListTile<String>(
+                      title: const Text(
+                        'English',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      value: 'English',
+                      groupValue: currentLang,
+                      onChanged: (val) => languageNotifier.value = val!,
+                    ),
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                    RadioListTile<String>(
+                      title: const Text(
+                        'Chinese (中文)',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      value: 'Chinese',
+                      groupValue: currentLang,
+                      onChanged: (val) => languageNotifier.value = val!,
+                    ),
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                    RadioListTile<String>(
+                      title: const Text(
+                        'Japanese (日本語)',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      value: 'Japanese',
+                      groupValue: currentLang,
+                      onChanged: (val) => languageNotifier.value = val!,
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+
+          _buildSectionHeader('About', context),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            elevation: isDark ? 0 : 0.2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: isDark
+                  ? BorderSide(color: Colors.grey.shade800)
+                  : BorderSide.none,
+            ),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.primary.withOpacity(0.1),
+                    child: Icon(
+                      Icons.info_outline,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  title: const Text(
+                    'App Version',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  trailing: Text(
+                    _version.isNotEmpty ? _version : 'Loading...',
+                    style: TextStyle(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withOpacity(0.6),
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(
+                      context,
+                    ).colorScheme.primary.withOpacity(0.1),
+                    child: Icon(
+                      Icons.feedback_outlined,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  title: const Text(
+                    'Send Feedback',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _launchFeedback,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
         ],
       ),
     );
